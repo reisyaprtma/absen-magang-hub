@@ -1,0 +1,15 @@
+name: Refresh MagangHub Token
+
+on:
+  schedule:
+    # Berjalan setiap 4 jam sekali (UTC: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00)
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # Memungkinkan trigger manual via tombol di GitHub
+
+jobs:
+  refresh-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel Refresh Endpoint
+        run: |
+          curl -s -X GET "https://${{ secrets.VERCEL_PROJECT_DOMAIN }}/api/cron-refresh"
