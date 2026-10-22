@@ -12,4 +12,11 @@ jobs:
     steps:
       - name: Trigger Vercel Refresh Endpoint
         run: |
-          curl -s -X GET "https://${{ secrets.VERCEL_PROJECT_DOMAIN }}/api/cron-refresh"
+          RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" "https://${{ secrets.VERCEL_PROJECT_DOMAIN }}/api/cron-refresh")
+          echo "$RESPONSE"
+          if echo "$RESPONSE" | grep -q "HTTP_STATUS:200"; then
+            echo "✅ Refresh successful!"
+          else
+            echo "❌ Refresh failed with status non-200"
+            exit 1
+          fi
