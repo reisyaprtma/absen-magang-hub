@@ -2,6 +2,8 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
+const cron = require('node-cron');
+const { WEEKEND_REPORT } = require('./lib/weekend-report');
 
 // ============================================================================
 // 1. KONFIGURASI UTAMA (DIBACA DARI FILE .env)
@@ -344,15 +346,144 @@ if (!CONFIG.TELEGRAM_BOT_TOKEN || CONFIG.TELEGRAM_BOT_TOKEN.startsWith('ISI_')) 
 const bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, { polling: true });
 const pendingDrafts = new Map();
 const activeTimers = new Map();
+let lastActiveChatId = CONFIG.ALLOWED_CHAT_ID;
 
 function isAuthorized(msg) {
+  if (msg && msg.chat && msg.chat.id) {
+    lastActiveChatId = msg.chat.id;
+  }
   if (!CONFIG.ALLOWED_CHAT_ID || CONFIG.ALLOWED_CHAT_ID.startsWith('ISI_')) {
     return true;
   }
   return String(msg.chat.id) === String(CONFIG.ALLOWED_CHAT_ID);
 }
 
+/**
+ * Eksekusi absen akhir pekan (Sabtu & Minggu) dengan delay random 1-3 detik
+ */
+async function executeWeekendAttendance(customChatId = null) {
+  const chatId = customChatId || CONFIG.ALLOWED_CHAT_ID || lastActiveChatId;
+  const dayName = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', weekday: 'short' }).format(new Date());
+  const dayIndo = { Sun: 'Minggu', Mon: 'Senin', Tue: 'Selasa', Wed: 'Rabu', Thu: 'Kamis', Fri: 'Jumat', Sat: 'Sabtu' }[dayName] || dayName;
+
+  // Delay acak 1-3 detik agar tidak terdeteksi sebagai bot
+  const delayMs = Math.floor(Math.random() * (3000 - 1000 + 1)) + 1000;
+  console.log(`[AutoAbsen Weekend] Memulai presensi akhir pekan (${dayIndo}). Delay acak: ${(delayMs / 1000).toFixed(2)} detik...`);
+
+  if (chatId) {
+    bot.sendMessage(
+      chatId,
+      `⏳ <b>Memproses Presensi Akhir Pekan (${dayIndo})</b>\n` +
+      `Menunggu jeda acak ${(delayMs / 1000).toFixed(2)} detik agar natural...\n\n` +
+      `<i>Target: Badan Pusat Statistik Kabupaten Ketapang</i>`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+  // 1. Cek apakah hari ini sudah pernah presensi
+  try {
+    const existing = await checkTodayAttendance();
+    if (existing) {
+      console.log(`[AutoAbsen Weekend] Sudah tercatat presensi hari ini (${existing.date}). ID: ${existing.id}`);
+      if (chatId) {
+        bot.sendMessage(
+          chatId,
+          `ℹ️ <b>Presensi Akhir Pekan Sudah Tercatat (${escapeHtml(existing.date)})</b>\n\n` +
+          `• ID Presensi: <code>${escapeHtml(existing.id)}</code>\n` +
+          `• Status: <b>${escapeHtml(existing.status)}</b>\n` +
+          `• Approval: <b>${escapeHtml(existing.approval_status)}</b>\n` +
+          `• Waktu: <code>${escapeHtml(existing.created_at)}</code>\n\n` +
+          `Bot tidak melakukan pengiriman ulang untuk mencegah duplikasi data.`,
+          { parse_mode: 'HTML' }
+        ).catch(() => {});
+      }
+      return;
+    }
+  } catch (err) {
+    console.warn('[AutoAbsen Weekend] Gagal cek status presensi sebelum submit:', err.message);
+  }
+
+  // 2. Submit laporan akhir pekan
+  try {
+    const res = await submitAttendance(WEEKEND_REPORT);
+    console.log('[AutoAbsen Weekend] Presensi akhir pekan sukses!', res.data?.id);
+    if (chatId) {
+      bot.sendMessage(
+        chatId,
+        `🎉 <b>Presensi Otomatis Akhir Pekan Berhasil!</b>\n\n` +
+        `📅 Tanggal: <code>${getTodayWIB()}</code> (${dayIndo})\n` +
+        `⏱️ Delay anti-bot: <code>${(delayMs / 1000).toFixed(2)} detik</code>\n` +
+        `• ID Presensi: <code>${escapeHtml(res.data?.id)}</code>\n` +
+        `• ID Log: <code>${escapeHtml(res.data?.daily_log?.id)}</code>\n` +
+        `• Status: <b>${escapeHtml(res.data?.status || 'PRESENT')}</b>\n` +
+        `• Waktu Server: <code>${escapeHtml(res.data?.created_at)}</code>\n\n` +
+        `📋 <b>Isian Laporan yang Terkirim:</b>\n\n` +
+        `<b>1. Aktivitas:</b>\n${escapeHtml(WEEKEND_REPORT.activity_log)}\n\n` +
+        `<b>2. Pembelajaran:</b>\n${escapeHtml(WEEKEND_REPORT.lesson_learned)}\n\n` +
+        `<b>3. Kendala:</b>\n${escapeHtml(WEEKEND_REPORT.obstacles)}`,
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+  } catch (err) {
+    console.error('[AutoAbsen Weekend] Gagal submit presensi akhir pekan:', err.message);
+    if (chatId) {
+      bot.sendMessage(
+        chatId,
+        `❌ <b>Presensi Otomatis Akhir Pekan GAGAL!</b>\n\n` +
+        `📅 Tanggal: <code>${getTodayWIB()}</code> (${dayIndo})\n` +
+        `⚠️ Error: <code>${escapeHtml(err.message)}</code>\n\n` +
+        `Silakan cek manual atau ketik /absen_weekend untuk mencoba ulang.`,
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Mengirim notifikasi reminder pengingat presensi jam 8 malam untuk hari kerja
+ */
+async function sendWeekdayReminder(customChatId = null) {
+  const chatId = customChatId || CONFIG.ALLOWED_CHAT_ID || lastActiveChatId;
+  if (!chatId) {
+    console.warn('[Reminder Weekday] Tidak ada Chat ID tujuan untuk mengirim pengingat.');
+    return;
+  }
+
+  const todayStr = getTodayWIB();
+  let att = null;
+  try {
+    att = await checkTodayAttendance();
+  } catch (err) {
+    console.warn('[Reminder Weekday] Gagal cek kehadiran saat reminder:', err.message);
+  }
+
+  if (att) {
+    bot.sendMessage(
+      chatId,
+      `🔔 <b>Pengingat Presensi Harian (20:00 WIB)</b>\n\n` +
+      `✅ Kamu <b>sudah mengisi presensi</b> hari ini (<b>${todayStr}</b>)!\n` +
+      `• ID Presensi: <code>${escapeHtml(att.id)}</code>\n` +
+      `• Status: <b>${escapeHtml(att.status)}</b>\n` +
+      `• Approval: <b>${escapeHtml(att.approval_status)}</b>\n\n` +
+      `Laporan harian kamu aman. Selamat beristirahat! ✨`,
+      { parse_mode: 'HTML' }
+    ).catch((e) => console.error('Gagal kirim pesan Telegram:', e.message));
+  } else {
+    bot.sendMessage(
+      chatId,
+      `⏰ <b>PENGINGAT PRESENSI MAGANG (20:00 WIB)!</b> ⚠️\n\n` +
+      `Halo! Hari ini (<b>${todayStr}</b>) kamu <b>BELUM mengisi absen</b> di MagangHub.\n\n` +
+      `👉 <b>Segera kirimkan pesan kegiatan magangmu hari ini ke bot ini</b>, bot akan merangkum draf laporan via Gemini dan mengirimkannya sebelum tengah malam!\n\n` +
+      `Ketik /cek untuk melihat status presensi terkini.`,
+      { parse_mode: 'HTML' }
+    ).catch((e) => console.error('Gagal kirim pesan Telegram:', e.message));
+  }
+}
+
 bot.onText(/^\/(id|start)/, (msg) => {
+  if (msg.chat && msg.chat.id) lastActiveChatId = msg.chat.id;
   bot.sendMessage(
     msg.chat.id,
     `👋 <b>Bot Presensi MagangHub Siap!</b>\n\n` +
@@ -360,12 +491,45 @@ bot.onText(/^\/(id|start)/, (msg) => {
     `<b>Perintah Tersedia:</b>\n` +
     `• Kirim teks kegiatan harian -> Generate draf & submit absen\n` +
     `• /cek -> Cek apakah hari ini sudah absen\n` +
+    `• /absen_weekend -> Draf & submit absen libur akhir pekan (Sabtu & Minggu)\n` +
+    `• /test_reminder -> Tes notifikasi pengingat absen jam 20:00 WIB\n` +
     `• /refresh -> Test perbarui token sesi sekarang\n` +
     `• /batal -> Batalkan jadwal absen delay yang sedang berjalan\n` +
     `• /settoken <code>token</code> -> Ganti Bearer token manual\n` +
-    `• /setcookie <code>cookie</code> -> Ganti Cookie manual`,
+    `• /setcookie <code>cookie</code> -> Ganti Cookie manual\n\n` +
+    `⏰ <b>Jadwal Otomatis:</b>\n` +
+    `• <b>Sabtu & Minggu:</b> Auto submit absen libur BPS jam 08:00 WIB (+ delay acak 1-3 detik)\n` +
+    `• <b>Senin - Jumat:</b> Notifikasi reminder pengingat presensi jam 20:00 WIB`,
     { parse_mode: 'HTML' }
   );
+});
+
+bot.onText(/^\/absen_weekend/, async (msg) => {
+  if (!isAuthorized(msg)) return;
+  const chatId = msg.chat.id;
+
+  const preview =
+    `📋 <b>DRAF LAPORAN AKHIR PEKAN (SABTU & MINGGU)</b>\n` +
+    `<i>Badan Pusat Statistik Kabupaten Ketapang</i>\n\n` +
+    `<b>1. Uraian Aktivitas (${WEEKEND_REPORT.activity_log.length} kar):</b>\n${escapeHtml(WEEKEND_REPORT.activity_log)}\n\n` +
+    `<b>2. Pembelajaran (${WEEKEND_REPORT.lesson_learned.length} kar):</b>\n${escapeHtml(WEEKEND_REPORT.lesson_learned)}\n\n` +
+    `<b>3. Kendala (${WEEKEND_REPORT.obstacles.length} kar):</b>\n${escapeHtml(WEEKEND_REPORT.obstacles)}`;
+
+  bot.sendMessage(chatId, preview, {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🚀 Kirim Sekarang (Delay 1-3s)', callback_data: 'send_weekend_now' }],
+        [{ text: '❌ Batal', callback_data: 'cancel' }]
+      ]
+    }
+  });
+});
+
+bot.onText(/^\/test_reminder/, async (msg) => {
+  if (!isAuthorized(msg)) return;
+  bot.sendMessage(msg.chat.id, '🔄 Menjalankan simulasi notifikasi reminder presensi...');
+  await sendWeekdayReminder(msg.chat.id);
 });
 
 bot.onText(/^\/cek/, async (msg) => {
@@ -488,6 +652,12 @@ bot.on('callback_query', async (query) => {
     return bot.sendMessage(chatId, '🚫 Pengiriman dibatalkan.');
   }
 
+  if (query.data === 'send_weekend_now') {
+    await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: query.message.message_id }).catch(() => {});
+    await executeWeekendAttendance(chatId);
+    return;
+  }
+
   if (!draft) {
     return bot.sendMessage(chatId, '⚠️ Draf sudah tidak berlaku. Silakan kirim teks kegiatan baru.');
   }
@@ -549,4 +719,26 @@ setInterval(() => {
   refreshAccessToken().catch((err) => console.error('⚠️ Auto-refresh interval gagal:', err.message));
 }, 5 * 60 * 60 * 1000);
 
+// ============================================================================
+// 6. JADWAL OTOMATIS
+// ============================================================================
+// Sabtu & Minggu: Auto submit jam 08:00 WIB (8 pagi)
+cron.schedule('0 8 * * 0,6', async () => {
+  const dayName = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', weekday: 'short' }).format(new Date());
+  console.log(`⏰ [Cron 08:00 WIB] Menjalankan Auto Absen Weekend (Hari: ${dayName})...`);
+  await executeWeekendAttendance();
+}, {
+  timezone: 'Asia/Jakarta'
+});
+
+// Senin s/d Jumat: Reminder pengingat presensi jam 20:00 WIB (8 malam)
+cron.schedule('0 20 * * 1-5', async () => {
+  const dayName = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', weekday: 'short' }).format(new Date());
+  console.log(`⏰ [Cron 20:00 WIB] Menjalankan Reminder Weekday (Hari: ${dayName})...`);
+  await sendWeekdayReminder();
+}, {
+  timezone: 'Asia/Jakarta'
+});
+
+console.log('⏰ Penjadwal otomatis aktif: Sabtu/Minggu auto-absen jam 08:00 WIB (+ delay 1-3s), Weekdays reminder jam 20:00 WIB.');
 console.log('🤖 Bot Presensi MagangHub siap! Kirim /cek di Telegram untuk uji koneksi.');

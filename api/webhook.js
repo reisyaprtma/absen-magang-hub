@@ -1,6 +1,7 @@
 const { loadSession, saveSession, saveDraft, getDraft, deleteDraft } = require('../lib/session');
 const { escapeHtml, getTodayWIB, checkTodayAttendance, submitAttendance, refreshAccessToken } = require('../lib/maganghub');
 const { generateDailyLogWithLLM } = require('../lib/gemini');
+const { WEEKEND_REPORT } = require('../lib/weekend-report');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID;
@@ -48,10 +49,70 @@ module.exports = async (req, res) => {
                 `<b>Perintah Tersedia:</b>\n` +
                 `• Kirim teks kegiatan harian -> Generate draf & submit absen\n` +
                 `• /cek -> Cek apakah hari ini sudah absen\n` +
+                `• /absen_weekend -> Draf & submit absen libur akhir pekan (Sabtu & Minggu)\n` +
+                `• /test_reminder -> Tes notifikasi pengingat absen jam 20:00 WIB\n` +
                 `• /refresh -> Test perbarui token sesi sekarang\n` +
                 `• /settoken <code>token</code> -> Ganti Bearer token manual\n` +
-                `• /setcookie <code>cookie</code> -> Ganti Cookie manual`
+                `• /setcookie <code>cookie</code> -> Ganti Cookie manual\n\n` +
+                `⏰ <b>Jadwal Otomatis:</b>\n` +
+                `• <b>Sabtu & Minggu:</b> Auto submit absen libur BPS jam 08:00 WIB (+ delay acak 1-3 detik)\n` +
+                `• <b>Senin - Jumat:</b> Notifikasi reminder pengingat presensi jam 20:00 WIB`
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Perintah /absen_weekend
+      if (/^\/absen_weekend/i.test(text)) {
+        const preview =
+          `📋 <b>DRAF LAPORAN AKHIR PEKAN (SABTU & MINGGU)</b>\n` +
+          `<i>Badan Pusat Statistik Kabupaten Ketapang</i>\n\n` +
+          `<b>1. Uraian Aktivitas (${WEEKEND_REPORT.activity_log.length} kar):</b>\n${escapeHtml(WEEKEND_REPORT.activity_log)}\n\n` +
+          `<b>2. Pembelajaran (${WEEKEND_REPORT.lesson_learned.length} kar):</b>\n${escapeHtml(WEEKEND_REPORT.lesson_learned)}\n\n` +
+          `<b>3. Kendala (${WEEKEND_REPORT.obstacles.length} kar):</b>\n${escapeHtml(WEEKEND_REPORT.obstacles)}`;
+
+        await sendTelegram('sendMessage', {
+          chat_id: chatId,
+          parse_mode: 'HTML',
+          text: preview,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🚀 Kirim Sekarang (Delay 1-3s)', callback_data: 'send_weekend_now' }],
+              [{ text: '❌ Batal', callback_data: 'cancel' }]
+            ]
+          }
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Perintah /test_reminder
+      if (/^\/test_reminder/i.test(text)) {
+        const todayStr = getTodayWIB();
+        let att = null;
+        try {
+          att = await checkTodayAttendance();
+        } catch (_) {}
+
+        if (att) {
+          await sendTelegram('sendMessage', {
+            chat_id: chatId,
+            parse_mode: 'HTML',
+            text: `🔔 <b>Pengingat Presensi Harian (20:00 WIB)</b>\n\n` +
+                  `✅ Kamu <b>sudah mengisi presensi</b> hari ini (<b>${todayStr}</b>)!\n` +
+                  `• ID Presensi: <code>${escapeHtml(att.id)}</code>\n` +
+                  `• Status: <b>${escapeHtml(att.status)}</b>\n` +
+                  `• Approval: <b>${escapeHtml(att.approval_status)}</b>\n\n` +
+                  `Laporan harian kamu aman. Selamat beristirahat! ✨`
+          });
+        } else {
+          await sendTelegram('sendMessage', {
+            chat_id: chatId,
+            parse_mode: 'HTML',
+            text: `⏰ <b>PENGINGAT PRESENSI MAGANG (20:00 WIB)!</b> ⚠️\n\n` +
+                  `Halo! Hari ini (<b>${todayStr}</b>) kamu <b>BELUM mengisi absen</b> di MagangHub.\n\n` +
+                  `👉 <b>Segera kirimkan pesan kegiatan harianmu ke bot ini sekarang</b>, bot akan merangkum draf laporan via Gemini untuk segera disubmit.\n\n` +
+                  `Ketik /cek untuk memeriksa ulang status presensimu.`
+          });
+        }
         return res.status(200).json({ ok: true });
       }
 
@@ -199,6 +260,40 @@ module.exports = async (req, res) => {
           reply_markup: { inline_keyboard: [] }
         });
         await sendTelegram('sendMessage', { chat_id: chatId, text: '🚫 Pengiriman dibatalkan.' });
+        return res.status(200).json({ ok: true });
+      }
+
+      if (query.data === 'send_weekend_now') {
+        await sendTelegram('editMessageReplyMarkup', {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          reply_markup: { inline_keyboard: [] }
+        });
+
+        const delayMs = Math.floor(Math.random() * (3000 - 1000 + 1)) + 1000;
+        await sendTelegram('sendMessage', {
+          chat_id: chatId,
+          text: `⏳ Menunggu delay acak ${(delayMs / 1000).toFixed(2)} detik agar natural...`
+        });
+        await new Promise((r) => setTimeout(r, delayMs));
+
+        try {
+          const result = await submitAttendance(WEEKEND_REPORT);
+          await sendTelegram('sendMessage', {
+            chat_id: chatId,
+            parse_mode: 'HTML',
+            text: `🎉 <b>Presensi Akhir Pekan Berhasil Disubmit!</b>\n\n` +
+                  `• ID Presensi: <code>${escapeHtml(result.data?.id)}</code>\n` +
+                  `• ID Log: <code>${escapeHtml(result.data?.daily_log?.id)}</code>\n` +
+                  `• Waktu Server: <code>${escapeHtml(result.data?.created_at)}</code>`
+          });
+        } catch (err) {
+          await sendTelegram('sendMessage', {
+            chat_id: chatId,
+            parse_mode: 'HTML',
+            text: `❌ <b>Gagal Submit Presensi Akhir Pekan:</b>\n<code>${escapeHtml(err.message)}</code>`
+          });
+        }
         return res.status(200).json({ ok: true });
       }
 

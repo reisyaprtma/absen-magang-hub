@@ -83,3 +83,44 @@ Jika berhasil, akan muncul respon:
 1. **Chat Telegram Langsung Dijawab Serverless Vercel**: Respon instan via webhook.
 2. **Auto Refresh Token Otomatis**: Vercel Cron berjalan setiap 4 jam sekali (`vercel.json`) untuk meminta token baru ke Kemnaker dan menyimpannya di Supabase.
 3. **Laptop Mati Total?**: Bot tetap hidup, token tidak akan basi!
+
+
+---
+
+### Fitur Baru: Otomatisasi Presensi & Reminder
+
+1. **Hari Libur (Sabtu & Minggu) - Pukul 08:00 WIB (8 Pagi):**
+   - Setiap jam 08:00 WIB, bot otomatis mengisi presensi magang dengan template khusus hari libur BPS Kabupaten Ketapang.
+   - Dilengkapi **jeda acak 1-3 detik** sebelum submit agar perilaku bot natural dan tidak terdeteksi sistem.
+   - Laporan presensi dikirimkan ke Telegram setelah berhasil.
+   - Tersedia perintah `/absen_weekend` jika ingin memicu/mengecek draf manual.
+
+2. **Hari Kerja / Weekdays (Senin s/d Jumat) - Pukul 20:00 WIB (8 Malam):**
+   - Setiap jam 20:00 WIB, bot memeriksa apakah Anda sudah mengisi presensi hari ini.
+   - Jika **belum**, bot akan mengirimkan pesan notifikasi reminder darurat ke Telegram agar Anda segera mengisi sebelum tengah malam.
+   - Jika **sudah**, bot akan mengirimkan konfirmasi bahwa absen hari ini aman.
+   - Tersedia perintah `/test_reminder` untuk mencoba format pesan pengingat kapan saja.
+
+3. **Cara Kerja Penjadwal di Vercel:**
+   - Dikonfigurasi langsung di file `vercel.json` menggunakan Vercel Cron:
+     ```json
+     {
+       "crons": [
+         {
+           "path": "/api/cron-attendance?mode=weekend",
+           "schedule": "0 1 * * 0,6"
+         },
+         {
+           "path": "/api/cron-attendance?mode=reminder",
+           "schedule": "0 13 * * 1-5"
+         }
+       ]
+     }
+     ```
+   - **Zona Waktu UTC ke WIB**:
+     - Weekend jam 08:00 WIB = 01:00 UTC (`0 1 * * 0,6`)
+     - Weekday jam 20:00 WIB = 13:00 UTC (`0 13 * * 1-5`)
+   - Cron job ini otomatis terdaftar di dashboard Vercel Anda (**Project Settings -> Cron Jobs**).
+   - **Uji Coba Langsung di Browser**:
+     - Cek reminder: `https://<domain-vercel-anda>/api/cron-attendance?mode=reminder`
+     - Cek absen weekend: `https://<domain-vercel-anda>/api/cron-attendance?mode=weekend`

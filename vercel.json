@@ -1,3 +1,18 @@
 {
-  "version": 2
+  "version": 2,
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron-attendance?mode=weekend",
+      "schedule": "0 1 * * 0,6"
+    },
+    {
+      "path": "/api/cron-attendance?mode=reminder",
+      "schedule": "0 13 * * 1-5"
+    }
+  ]
 }
