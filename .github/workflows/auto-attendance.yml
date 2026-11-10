@@ -1,0 +1,24 @@
+name: Auto Attendance & Reminder
+
+on:
+  schedule:
+    # Weekend (Sabtu & Minggu) jam 08:00 WIB = 01:00 UTC
+    - cron: '0 1 * * 6,0'
+    # Weekdays (Senin s/d Jumat) jam 20:00 WIB = 13:00 UTC
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch: # Trigger manual lewat tombol Actions di GitHub
+
+jobs:
+  attendance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Attendance / Reminder Endpoint
+        run: |
+          RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" "https://${{ secrets.VERCEL_PROJECT_DOMAIN }}/api/cron-attendance")
+          echo "$RESPONSE"
+          if echo "$RESPONSE" | grep -q "HTTP_STATUS:200"; then
+            echo "✅ Trigger berhasil!"
+          else
+            echo "❌ Trigger gagal dengan status non-200"
+            exit 1
+          fi

@@ -101,26 +101,10 @@ Jika berhasil, akan muncul respon:
    - Jika **sudah**, bot akan mengirimkan konfirmasi bahwa absen hari ini aman.
    - Tersedia perintah `/test_reminder` untuk mencoba format pesan pengingat kapan saja.
 
-3. **Cara Kerja Penjadwal di Vercel:**
-   - Dikonfigurasi langsung di file `vercel.json` menggunakan Vercel Cron:
-     ```json
-     {
-       "crons": [
-         {
-           "path": "/api/cron-attendance?mode=weekend",
-           "schedule": "0 1 * * 0,6"
-         },
-         {
-           "path": "/api/cron-attendance?mode=reminder",
-           "schedule": "0 13 * * 1-5"
-         }
-       ]
-     }
-     ```
-   - **Zona Waktu UTC ke WIB**:
-     - Weekend jam 08:00 WIB = 01:00 UTC (`0 1 * * 0,6`)
-     - Weekday jam 20:00 WIB = 13:00 UTC (`0 13 * * 1-5`)
-   - Cron job ini otomatis terdaftar di dashboard Vercel Anda (**Project Settings -> Cron Jobs**).
+3. **Cara Kerja Penjadwal Otomatis (GitHub Actions):**
+   - Menggunakan GitHub Actions workflow [.github/workflows/auto-attendance.yml](file:///.github/workflows/auto-attendance.yml) yang memicu endpoint Vercel tanpa terkena limit cron Vercel:
+     - **Sabtu & Minggu jam 08:00 WIB** (`0 1 * * 6,0` UTC) -> Otomatis submit absen libur BPS (+ delay acak 1-3 detik).
+     - **Senin s/d Jumat jam 20:00 WIB** (`0 13 * * 1-5` UTC) -> Otomatis kirim reminder presensi ke Telegram.
    - **Uji Coba Langsung di Browser**:
      - Cek reminder: `https://<domain-vercel-anda>/api/cron-attendance?mode=reminder`
      - Cek absen weekend: `https://<domain-vercel-anda>/api/cron-attendance?mode=weekend`
