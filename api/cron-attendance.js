@@ -113,7 +113,8 @@ module.exports = async (req, res) => {
                   `• ID Presensi: <code>${escapeHtml(att.id)}</code>\n` +
                   `• Status: <b>${escapeHtml(att.status)}</b>\n` +
                   `• Approval: <b>${escapeHtml(att.approval_status)}</b>\n\n` +
-                  `Laporan harian kamu aman. Selamat beristirahat! ✨`
+                  `Laporan harian kamu aman. Selamat beristirahat! ✨\n\n` +
+                  `<i>(Notifikasi otomatis dari GitHub Actions)</i>`
           });
         } else {
           await sendTelegram('sendMessage', {
@@ -121,8 +122,9 @@ module.exports = async (req, res) => {
             parse_mode: 'HTML',
             text: `⏰ <b>PENGINGAT PRESENSI MAGANG (20:00 WIB)!</b> ⚠️\n\n` +
                   `Halo! Hari ini (<b>${todayStr}</b>) kamu <b>BELUM mengisi absen</b> di MagangHub.\n\n` +
-                  `👉 <b>Segera kirimkan pesan kegiatan harianmu ke bot ini sekarang</b>, bot akan merangkum draf laporan via Gemini untuk segera disubmit.\n\n` +
-                  `Ketik /cek untuk memeriksa ulang status presensimu.`
+                  `👉 <b>Segera kirimkan pesan kegiatan harianmu ke bot ini sekarang</b>, bot akan merangkum draf laporan via Gemini untuk segera disubmit sebelum pergantian hari!\n\n` +
+                  `Ketik /cek untuk memeriksa ulang status presensimu.\n\n` +
+                  `<i>(Notifikasi otomatis dari GitHub Actions)</i>`
           });
         }
       }
